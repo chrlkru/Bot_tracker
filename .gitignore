@@ -1,0 +1,40 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+.venv/
+venv/
+ENV/
+env/
+env.bak/
+venv.bak/
+
+# PyCharm / IntelliJ
+.idea/
+*.iml
+modules.xml
+workspace.xml
+profiles_settings.xml
+.gigaide/
+# VSCode
+.vscode/
+
+# Environment variables
+.env
+
+# Logs and databases
+*.log
+*.sqlite3
+*.db
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
