@@ -10,6 +10,10 @@ from states import SupportRequest
 from tracker import create_issue, upload_attachments
 
 router = Router()
+import re
+
+PHONE_RE = re.compile(r'^\+?\d{10,15}$')               # от 10 до 15 цифр, с опциональным "+"
+EMAIL_RE = re.compile(r'^[\w\.-]+@[\w\.-]+\.\w{2,}$')  # простой шаблон e-mail
 
 def build_confirm_kb() -> InlineKeyboardBuilder:
     """
@@ -21,7 +25,7 @@ def build_confirm_kb() -> InlineKeyboardBuilder:
     kb.adjust(2)
     return kb
 
-@router.message(Command("support"))
+@router.message(Command("start"))
 async def cmd_support(message: Message, state: FSMContext):
     """
     Стартовый хэндлер: очищаем предыдущие данные и переходим к сбору организации.
@@ -32,57 +36,71 @@ async def cmd_support(message: Message, state: FSMContext):
 
 @router.message(StateFilter(SupportRequest.waiting_for_organization))
 async def org_entered(message: Message, state: FSMContext):
-    await state.update_data(organization=message.text)
+    text = message.text.strip()
+    if not text:
+        return await message.answer("Название организации не может быть пустым. Пожалуйста, введите ещё раз:")
+    await state.update_data(organization=text)
     await state.set_state(SupportRequest.waiting_for_full_name)
-    await message.answer("✍️ Введите ваше ФИО:")
+    await message.answer("✍️ Теперь введите ваше ФИО (имя и фамилия):")
 
 @router.message(StateFilter(SupportRequest.waiting_for_full_name))
 async def name_entered(message: Message, state: FSMContext):
-    await state.update_data(full_name=message.text)
+    text = message.text.strip()
+    if len(text.split()) < 2:
+        return await message.answer("Пожалуйста, укажите как минимум имя и фамилию:")
+    await state.update_data(full_name=text)
     await state.set_state(SupportRequest.waiting_for_phone)
-    await message.answer("📞 Укажите номер телефона:")
+    await message.answer("📞 Укажите номер телефона (10–15 цифр, можно с '+'):")
 
 @router.message(StateFilter(SupportRequest.waiting_for_phone))
 async def phone_entered(message: Message, state: FSMContext):
-    await state.update_data(phone=message.text)
+    text = message.text.strip()
+    if not PHONE_RE.match(text):
+        return await message.answer("Некорректный номер. Введите номер из 10–15 цифр, например +71234567890:")
+    await state.update_data(phone=text)
     await state.set_state(SupportRequest.waiting_for_email)
-    await message.answer("✉️ Введите e-mail:")
+    await message.answer("✉️ Введите ваш e-mail:")
 
 @router.message(StateFilter(SupportRequest.waiting_for_email))
 async def email_entered(message: Message, state: FSMContext):
-    await state.update_data(email=message.text)
+    text = message.text.strip()
+    if not EMAIL_RE.match(text):
+        return await message.answer("Некорректный e-mail. Попробуйте ещё раз, например user@example.com:")
+    await state.update_data(email=text)
     await state.set_state(SupportRequest.waiting_for_topic)
     await message.answer("📝 Тема обращения:")
 
 @router.message(StateFilter(SupportRequest.waiting_for_topic))
 async def topic_entered(message: Message, state: FSMContext):
-    await state.update_data(topic=message.text)
+    text = message.text.strip()
+    if len(text) < 3:
+        return await message.answer("Слишком короткая тема. Опишите тему хотя бы в 3 символа:")
+    await state.update_data(topic=text)
     await state.set_state(SupportRequest.waiting_for_description)
-    await message.answer("🖋 Опишите проблему подробно:")
+    await message.answer("🖋 Опишите проблему подробно (не менее 10 символов):")
 
 @router.message(StateFilter(SupportRequest.waiting_for_description))
 async def description_entered(message: Message, state: FSMContext):
-    await state.update_data(description=message.text)
+    text = message.text.strip()
+    if len(text) < 10:
+        return await message.answer("Слишком короткое описание. Опишите проблему подробнее:")
+    await state.update_data(description=text)
     await state.set_state(SupportRequest.waiting_for_attachments)
-    await message.answer("📎 Прикрепите файлы (скриншоты) или введите /skip, если их нет.")
+    await message.answer("📎 Прикрепите файлы или введите /skip, если их нет.")
+
+
 
 @router.message(
     StateFilter(SupportRequest.waiting_for_attachments),
-    F.photo | F.document | (F.text & (~F.text.startswith("/")))  # принимаем фото, документы или любой текст, не начинающийся с "/"
+    F.photo | F.document | F.text
 )
 async def attachments_entered(message: Message, state: FSMContext):
-    data = await state.get_data()
-    files = data.get("attachments", [])
-    if message.photo or message.document:
-        file_id = message.photo[-1].file_id if message.photo else message.document.file_id
-        files.append(file_id)
-        await state.update_data(attachments=files)
-        await message.answer("Файл получен. Можете добавить ещё или введите /done.")
-        return
-
-    # любой ввод, не файл, обрабатываем ниже
     text = message.text or ""
-    if text.lower() in ("/skip", "/done"):
+
+    # 1) Если пользователь ввёл /skip — переходим сразу к подтверждению
+    if text.strip().lower() == "/skip":
+        data = await state.get_data()
+        files = data.get("attachments", [])
         summary = (
             f"👀 Проверьте данные:\n"
             f"• Организация: {data['organization']}\n"
@@ -96,10 +114,21 @@ async def attachments_entered(message: Message, state: FSMContext):
         kb = build_confirm_kb().as_markup()
         await state.update_data(attachments=files)
         await state.set_state(SupportRequest.waiting_for_confirmation)
-        await message.answer(summary, reply_markup=kb)
-        return
+        return await message.answer(summary, reply_markup=kb)
 
-    await message.answer("ℹ️ Прикрепите файл или введите /skip /done для продолжения.")
+    # 2) Если это фото или документ — сохраняем его
+    if message.photo or message.document:
+        attachments = (await state.get_data()).get("attachments", [])
+        attachments.append(message.document or message.photo[-1])
+        await state.update_data(attachments=attachments)
+        return await message.answer(
+            f"Файл получен. Всего вложений: {len(attachments)}.\n"
+            "Если больше нет — введите /skip."
+        )
+
+    # 3) Любой другой текст
+    await message.answer("Пожалуйста, прикрепите файл или введите /skip для продолжения.")
+
 
 @router.callback_query(
     F.data.in_(["confirm_yes", "confirm_no"]),
@@ -112,7 +141,7 @@ async def on_confirm(call: CallbackQuery, state: FSMContext):
     await call.answer()  # убираем индикатор загрузки
     if call.data == "confirm_no":
         await state.clear()
-        return await call.message.edit_text("❌ Отмена. /support для нового обращения")
+        return await call.message.edit_text("❌ Отмена. /start для нового обращения")
 
     # Пользователь подтвердил создание тикета
     data = await state.get_data()
