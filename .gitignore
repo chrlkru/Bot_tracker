@@ -38,3 +38,6 @@ build/
 dist/
 *.egg-info/
 .eggs/
+
+# Docker
+.dockerignore
