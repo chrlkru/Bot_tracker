@@ -23,7 +23,7 @@ profiles_settings.xml
 
 # Environment variables
 .env
-
+config.txt
 # Logs and databases
 *.log
 *.sqlite3
